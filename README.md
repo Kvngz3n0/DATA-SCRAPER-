@@ -7,3 +7,4 @@ chmod +x *<br>
 pip install -r requirements.txt
 # useage 
 python Duke.py 
+use Duke2 for the updated script 
