@@ -25,6 +25,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,11 +62,18 @@ class MainActivity : ComponentActivity() {
 fun AppScreen() {
     val context = LocalContext.current
     val scraper = remember { ScraperService(cacheDir = context.cacheDir) }
-    val registry = SourceRegistry.all()
+    var registry by remember { mutableStateOf(SourceRegistry.all(context)) }
     var query by remember { mutableStateOf("") }
     var selectedSource by remember { mutableStateOf<SourceExtension?>(null) }
     var results by remember { mutableStateOf<List<MangaItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
+    var isAddDialogOpen by remember { mutableStateOf(false) }
+    var customSourceName by remember { mutableStateOf("") }
+    var customSourceUrl by remember { mutableStateOf("") }
+    var customItemSelector by remember { mutableStateOf("a[href]") }
+    var customTitleSelector by remember { mutableStateOf("a[href]") }
+    var customCoverSelector by remember { mutableStateOf("img") }
+    var customHrefSelector by remember { mutableStateOf("a[href]") }
     val scope = rememberCoroutineScope()
 
     Scaffold(
@@ -126,6 +135,15 @@ fun AppScreen() {
                     modifier = Modifier.padding(vertical = 8.dp)
                 ) {
                     Text("Search")
+                }
+            }
+
+            item {
+                Button(
+                    onClick = { isAddDialogOpen = true },
+                    modifier = Modifier.padding(vertical = 8.dp)
+                ) {
+                    Text("Add custom source")
                 }
             }
 

@@ -7,7 +7,7 @@
         android:usesCleartextTraffic="true"
         android:label="MangaScraper"
         android:icon="@mipmap/ic_launcher"
-        android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        android:theme="@style/Theme.MangaScraper">
         <activity
             android:name=".MainActivity"
             android:exported="true">
