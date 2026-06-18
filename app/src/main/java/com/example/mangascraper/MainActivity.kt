@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -43,11 +44,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+private val BlackGoldColorScheme = darkColorScheme(
+    primary = Color(0xFFFFD700),
+    onPrimary = Color.Black,
+    secondary = Color(0xFFB8860B),
+    onSecondary = Color.Black,
+    background = Color.Black,
+    surface = Color(0xFF121212),
+    onSurface = Color(0xFFFFD700),
+    surfaceVariant = Color(0xFF1F1F1F),
+    onBackground = Color(0xFFFFD700),
+    error = Color(0xFFCF6679),
+    onError = Color.Black
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = BlackGoldColorScheme) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AppScreen()
                 }
@@ -63,6 +78,7 @@ fun AppScreen() {
     val scraper = remember { ScraperService(cacheDir = context.cacheDir) }
     val crawler = remember { MediaCrawler(context, scraper) }
     var startUrl by remember { mutableStateOf("") }
+    var outputFolder by remember { mutableStateOf("") }
     var minSize by remember { mutableStateOf("0") }
     var maxDepth by remember { mutableStateOf("2") }
     var maxPages by remember { mutableStateOf("20") }
@@ -96,6 +112,16 @@ fun AppScreen() {
                     onValueChange = { startUrl = it },
                     label = { Text("Start URL") },
                     placeholder = { Text("https://example.com") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = outputFolder,
+                    onValueChange = { outputFolder = it },
+                    label = { Text("Download folder") },
+                    placeholder = { Text("/storage/emulated/0/Download/media") },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -174,6 +200,7 @@ fun AppScreen() {
                                 maxDepth = maxDepth.toIntOrNull() ?: 2,
                                 maxPages = maxPages.toIntOrNull() ?: 20,
                                 sameDomain = sameDomain,
+                                destinationPath = outputFolder.ifBlank { null },
                                 progress = { message ->
                                     logMessages.add(message)
                                 }

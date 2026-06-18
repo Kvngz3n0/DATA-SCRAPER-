@@ -34,6 +34,7 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         maxDepth: Int,
         maxPages: Int,
         sameDomain: Boolean,
+        destinationPath: String?,
         progress: (String) -> Unit
     ): List<MediaResult> = withContext(Dispatchers.IO) {
         val normalizedUrl = buildUrl(startUrl) ?: return@withContext emptyList()
@@ -43,7 +44,11 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         queue.add(normalizedUrl to 0)
         val rootDomain = URL(normalizedUrl).host
         val types = if (selectedTypes.isEmpty()) MediaType.values().toSet() else selectedTypes
-        val destinationRoot = File(context.getExternalFilesDir(null), "media").apply { mkdirs() }
+        val destinationRoot = destinationPath?.let { File(it) } ?: File(context.getExternalFilesDir(null), "media")
+        if (!destinationRoot.exists() && !destinationRoot.mkdirs()) {
+            progress("Unable to create destination folder: ${destinationRoot.absolutePath}")
+            return@withContext results
+        }
 
         while (queue.isNotEmpty() && visited.size < maxPages) {
             val (url, depth) = queue.removeFirst()
