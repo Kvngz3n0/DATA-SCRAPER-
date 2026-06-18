@@ -3,45 +3,44 @@ package com.example.mangascraper
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.foundation.background
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import coil.compose.AsyncImage
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -62,55 +61,94 @@ class MainActivity : ComponentActivity() {
 fun AppScreen() {
     val context = LocalContext.current
     val scraper = remember { ScraperService(cacheDir = context.cacheDir) }
-    var registry by remember { mutableStateOf(SourceRegistry.all(context)) }
-    var query by remember { mutableStateOf("") }
-    var selectedSource by remember { mutableStateOf<SourceExtension?>(null) }
-    var results by remember { mutableStateOf<List<MangaItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var isAddDialogOpen by remember { mutableStateOf(false) }
-    var customSourceName by remember { mutableStateOf("") }
-    var customSourceUrl by remember { mutableStateOf("") }
-    var customItemSelector by remember { mutableStateOf("a[href]") }
-    var customTitleSelector by remember { mutableStateOf("a[href]") }
-    var customCoverSelector by remember { mutableStateOf("img") }
-    var customHrefSelector by remember { mutableStateOf("a[href]") }
+    val crawler = remember { MediaCrawler(context, scraper) }
+    var startUrl by remember { mutableStateOf("") }
+    var minSize by remember { mutableStateOf("0") }
+    var maxDepth by remember { mutableStateOf("2") }
+    var maxPages by remember { mutableStateOf("20") }
+    var sameDomain by remember { mutableStateOf(true) }
+    val selectedTypes = remember { mutableStateListOf(MediaType.IMAGES, MediaType.VIDEOS, MediaType.AUDIO) }
+    var isRunning by remember { mutableStateOf(false) }
+    var logMessages = remember { mutableStateListOf<String>() }
+    var results by remember { mutableStateOf<List<MediaResult>>(emptyList()) }
     val scope = rememberCoroutineScope()
+    var showResultCount by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("MangaScraper") })
+            TopAppBar(title = { Text("Android Media Scraper") })
         }
     ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                TextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search manga or source") }
+                Text("Crawl Settings", fontWeight = FontWeight.Bold)
+            }
+
+            item {
+                OutlinedTextField(
+                    value = startUrl,
+                    onValueChange = { startUrl = it },
+                    label = { Text("Start URL") },
+                    placeholder = { Text("https://example.com") },
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
 
             item {
-                androidx.compose.foundation.layout.Column(
-                    modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
-                ) {
-                    Text("Sources", modifier = Modifier.padding(bottom = 6.dp))
-                    androidx.compose.foundation.lazy.LazyRow(
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(registry) { source ->
-                            FilterChip(
-                                selected = selectedSource?.id == source.id,
-                                onClick = {
-                                    selectedSource = if (selectedSource?.id == source.id) null else source
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = minSize,
+                        onValueChange = { minSize = it.filter { char -> char.isDigit() } },
+                        label = { Text("Min size KB") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = maxDepth,
+                        onValueChange = { maxDepth = it.filter { char -> char.isDigit() } },
+                        label = { Text("Max depth") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = maxPages,
+                        onValueChange = { maxPages = it.filter { char -> char.isDigit() } },
+                        label = { Text("Max pages") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            item {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("Same domain only", modifier = Modifier.weight(1f))
+                    Switch(checked = sameDomain, onCheckedChange = { sameDomain = it })
+                }
+            }
+
+            item {
+                Text("Media types", fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MediaType.values().forEach { type ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (selectedTypes.contains(type)) selectedTypes.remove(type)
+                                    else selectedTypes.add(type)
                                 },
-                                label = { Text(source.name) }
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(type.label)
+                            Checkbox(
+                                checked = selectedTypes.contains(type),
+                                onCheckedChange = {
+                                    if (it) selectedTypes.add(type) else selectedTypes.remove(type)
+                                }
                             )
                         }
                     }
@@ -120,71 +158,53 @@ fun AppScreen() {
             item {
                 Button(
                     onClick = {
-                        val source = selectedSource ?: registry.firstOrNull()
-                        if (source != null && query.isNotBlank()) {
-                            isLoading = true
-                            scope.launch {
-                                try {
-                                    results = source.search(query, scraper)
-                                } finally {
-                                    isLoading = false
+                        if (startUrl.isBlank()) {
+                            logMessages.add("Please enter a valid starting URL.")
+                            return@Button
+                        }
+                        isRunning = true
+                        results = emptyList()
+                        logMessages.clear()
+                        showResultCount = false
+                        scope.launch {
+                            results = crawler.crawl(
+                                startUrl = startUrl,
+                                selectedTypes = selectedTypes.toSet(),
+                                minSizeKb = minSize.toIntOrNull() ?: 0,
+                                maxDepth = maxDepth.toIntOrNull() ?: 2,
+                                maxPages = maxPages.toIntOrNull() ?: 20,
+                                sameDomain = sameDomain,
+                                progress = { message ->
+                                    logMessages.add(message)
                                 }
-                            }
+                            )
+                            isRunning = false
+                            showResultCount = true
                         }
                     },
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isRunning
                 ) {
-                    Text("Search")
+                    Text(if (isRunning) "Crawling..." else "Start Crawl")
                 }
             }
 
             item {
-                Button(
-                    onClick = { isAddDialogOpen = true },
-                    modifier = Modifier.padding(vertical = 8.dp)
-                ) {
-                    Text("Add custom source")
+                if (showResultCount) {
+                    Text("Found ${results.size} media items", fontWeight = FontWeight.Bold)
                 }
             }
 
-            if (isLoading) {
-                item {
+            item {
+                Text("Progress log", fontWeight = FontWeight.Bold)
+            }
+
+            items(logMessages) { message ->
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Searching...",
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-            }
-
-            items(results) { item ->
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    androidx.compose.foundation.layout.Row(
+                        text = message,
                         modifier = Modifier.padding(12.dp)
-                    ) {
-                        AsyncImage(
-                            model = item.coverUrl,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .padding(end = 12.dp)
-                                .background(Color.LightGray),
-                            contentScale = ContentScale.Crop
-                        )
-                        androidx.compose.foundation.layout.Column {
-                            Text(item.title, style = MaterialTheme.typography.titleMedium)
-                            Text(item.sourceName, style = MaterialTheme.typography.bodySmall)
-                            if (item.isNsfw) {
-                                AssistChip(
-                                    onClick = {},
-                                    label = { Text("18+") }
-                                )
-                            }
-                        }
-                    }
+                    )
                 }
             }
         }
