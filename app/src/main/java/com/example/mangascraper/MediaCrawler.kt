@@ -1,6 +1,8 @@
 package com.example.mangascraper
 
 import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
@@ -34,7 +36,7 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         maxDepth: Int,
         maxPages: Int,
         sameDomain: Boolean,
-        destinationPath: String?,
+        destinationTreeUri: Uri?,
         progress: (String) -> Unit
     ): List<MediaResult> = withContext(Dispatchers.IO) {
         val normalizedUrl = buildUrl(startUrl) ?: return@withContext emptyList()
@@ -44,10 +46,9 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         queue.add(normalizedUrl to 0)
         val rootDomain = URL(normalizedUrl).host
         val types = if (selectedTypes.isEmpty()) MediaType.values().toSet() else selectedTypes
-        val destinationRoot = destinationPath?.let { File(it) } ?: File(context.getExternalFilesDir(null), "media")
-        if (!destinationRoot.exists() && !destinationRoot.mkdirs()) {
-            progress("Unable to create destination folder: ${destinationRoot.absolutePath}")
-            return@withContext results
+
+        val destinationRootFolder = destinationTreeUri?.let { uri ->
+            DocumentFile.fromTreeUri(context, uri)
         }
 
         while (queue.isNotEmpty() && visited.size < maxPages) {
@@ -71,17 +72,21 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                             continue
                         }
                         val filename = chooseFilename(link, type)
-                        val folder = File(destinationRoot, type.label)
-                        folder.mkdirs()
-                        val file = File(folder, filename)
-                        file.writeBytes(bytes)
-                        results += MediaResult(
-                            url = link,
-                            type = type,
-                            filename = file.name,
-                            sizeKb = bytes.size / 1024,
-                            sourcePage = url
-                        )
+                        val saved = if (destinationRootFolder != null && destinationRootFolder.exists()) {
+                            saveToDocumentFolder(destinationRootFolder, type, filename, bytes)
+                        } else {
+                            saveToFileSystem(type, filename, bytes)
+                        }
+
+                        if (saved != null) {
+                            results += MediaResult(
+                                url = link,
+                                type = type,
+                                filename = saved,
+                                sizeKb = bytes.size / 1024,
+                                sourcePage = url
+                            )
+                        }
                     } catch (e: Exception) {
                         progress("Download failed: ${e.message}")
                     }
@@ -97,8 +102,36 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
             }
         }
 
-        progress("Crawl finished. Saved files under ${destinationRoot.absolutePath}")
+        val destinationPath = destinationRootFolder?.uri?.toString() ?: File(context.getExternalFilesDir(null), "media").absolutePath
+        progress("Crawl finished. Saved files under $destinationPath")
         return@withContext results
+    }
+
+    private fun saveToDocumentFolder(root: DocumentFile, type: MediaType, filename: String, bytes: ByteArray): String? {
+        val typeDirectory = root.findFile(type.label) as? DocumentFile ?: root.createDirectory(type.label)
+        if (typeDirectory == null || !typeDirectory.isDirectory) {
+            return null
+        }
+        val mimeType = when (type) {
+            MediaType.IMAGES -> "image/*"
+            MediaType.VIDEOS -> "video/*"
+            MediaType.AUDIO -> "audio/*"
+            MediaType.DOCUMENTS -> "application/pdf"
+            MediaType.ARCHIVES -> "application/zip"
+            MediaType.EBOOKS -> "application/epub+zip"
+        }
+        val file = typeDirectory.createFile(mimeType, filename) ?: return null
+        context.contentResolver.openOutputStream(file.uri)?.use { it.write(bytes) }
+        return file.name ?: filename
+    }
+
+    private fun saveToFileSystem(type: MediaType, filename: String, bytes: ByteArray): String {
+        val destinationRoot = File(context.getExternalFilesDir(null), "media")
+        val folder = File(destinationRoot, type.label)
+        folder.mkdirs()
+        val file = File(folder, filename)
+        file.writeBytes(bytes)
+        return file.name
     }
 
     private fun buildUrl(input: String): String? {

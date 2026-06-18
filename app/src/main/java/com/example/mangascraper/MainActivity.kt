@@ -1,8 +1,12 @@
 package com.example.mangascraper
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.launch
 
 private val BlackGoldColorScheme = darkColorScheme(
@@ -78,7 +83,8 @@ fun AppScreen() {
     val scraper = remember { ScraperService(cacheDir = context.cacheDir) }
     val crawler = remember { MediaCrawler(context, scraper) }
     var startUrl by remember { mutableStateOf("") }
-    var outputFolder by remember { mutableStateOf("") }
+    var destinationUri by remember { mutableStateOf<Uri?>(null) }
+    var destinationLabel by remember { mutableStateOf("Use default internal folder") }
     var minSize by remember { mutableStateOf("0") }
     var maxDepth by remember { mutableStateOf("2") }
     var maxPages by remember { mutableStateOf("20") }
@@ -89,6 +95,19 @@ fun AppScreen() {
     var results by remember { mutableStateOf<List<MediaResult>>(emptyList()) }
     val scope = rememberCoroutineScope()
     var showResultCount by remember { mutableStateOf(false) }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            destinationUri = uri
+            destinationLabel = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -117,13 +136,16 @@ fun AppScreen() {
             }
 
             item {
-                OutlinedTextField(
-                    value = outputFolder,
-                    onValueChange = { outputFolder = it },
-                    label = { Text("Download folder") },
-                    placeholder = { Text("/storage/emulated/0/Download/media") },
+                Button(
+                    onClick = { folderPickerLauncher.launch(null) },
                     modifier = Modifier.fillMaxWidth()
-                )
+                ) {
+                    Text("Pick download folder")
+                }
+            }
+
+            item {
+                Text("Selected folder: $destinationLabel")
             }
 
             item {
@@ -200,7 +222,7 @@ fun AppScreen() {
                                 maxDepth = maxDepth.toIntOrNull() ?: 2,
                                 maxPages = maxPages.toIntOrNull() ?: 20,
                                 sameDomain = sameDomain,
-                                destinationPath = outputFolder.ifBlank { null },
+                                destinationTreeUri = destinationUri,
                                 progress = { message ->
                                     logMessages.add(message)
                                 }
