@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.layout.ContentScale
@@ -57,7 +58,9 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScreen() {
-    val registry = SourceRegistry.available()
+    val context = LocalContext.current
+    val scraper = remember { ScraperService(cacheDir = context.cacheDir) }
+    val registry = SourceRegistry.all()
     var query by remember { mutableStateOf("") }
     var selectedSource by remember { mutableStateOf<SourceExtension?>(null) }
     var results by remember { mutableStateOf<List<MangaItem>>(emptyList()) }
@@ -113,7 +116,7 @@ fun AppScreen() {
                             isLoading = true
                             scope.launch {
                                 try {
-                                    results = source.search(query)
+                                    results = source.search(query, scraper)
                                 } finally {
                                     isLoading = false
                                 }

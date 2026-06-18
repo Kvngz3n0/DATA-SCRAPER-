@@ -29,7 +29,7 @@ class ScraperService(
             val request = original.newBuilder()
                 .header("User-Agent", pickRandomUserAgent())
                 .header("Accept-Language", "en-US,en;q=0.9")
-                .header("Referer", original.url().host)
+                .header("Referer", original.url.host)
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .build()
             chain.proceed(request)
