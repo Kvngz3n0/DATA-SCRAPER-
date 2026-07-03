@@ -2,3 +2,5 @@ requests
 beautifulsoup4
 cloudscraper
 curl-cffi
+httpx[http2]
+pyppeteer

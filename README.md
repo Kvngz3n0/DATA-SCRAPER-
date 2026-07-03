@@ -8,6 +8,8 @@ This repo now includes `Duke2_Enhanced.py`, a more capable version with Cloudfla
 
 - Cloudflare bypass engine selection
 - TLS fingerprint impersonation via `curl_cffi`
+- HTTP/2 transport via `httpx`
+- Headless browser fallback via `pyppeteer`
 - Fallback to `cloudscraper` or standard `requests`
 - Interactive URL entry and scraping options
 - Max crawl depth and max page limits
@@ -76,8 +78,8 @@ chmod +x Duke2_Enhanced.py
    - `Auto` uses the best available engine.
    - `curl_cffi` is the fastest bypass option when installed.
    - `cloudscraper` solves Cloudflare JS challenges.
-   - `Standard requests` uses plain HTTP without bypass.
-
+- `httpx` uses HTTP/2 and browser-like transport for better success on heavy sites.
+- `browser` uses a headless browser fallback for JS-heavy or challenge-protected pages.
 9. **External viewer**
    - Choose whether downloaded files should open automatically after download.
    - This is useful on Android/Termux with `termux-open`.

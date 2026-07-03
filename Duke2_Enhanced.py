@@ -15,19 +15,33 @@ import hashlib
 import threading
 import subprocess
 import base64
+import asyncio
+import types
 import requests
 from urllib.parse import urljoin, urlparse, unquote
 from queue import Queue
 
 # ── CLOUDFLARE BYPASS ENGINE ──────────────────────────────────────────────
 # Uses curl_cffi for TLS fingerprint impersonation (JA3/JA4 bypass)
-# Falls back to requests + cloudscraper if curl_cffi unavailable
+# Uses httpx for HTTP/2 transport and browser-like requests
+# Uses pyppeteer for a headless browser fallback on JS-heavy sites
 
 HTTP_ENGINE = "requests"  # default, will try to upgrade
 CF_AVAILABLE = False
 CLOUDSCRAPER_AVAILABLE = False
+HTTPX_AVAILABLE = False
+PYPPETEER_AVAILABLE = False
 cf_requests = None
 cloudscraper = None
+httpx = None
+pyppeteer = None
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+    print("[+] httpx loaded - HTTP/2 support ACTIVE")
+except ImportError:
+    print("[!] httpx not installed - run: pip install httpx[http2]")
 
 try:
     from curl_cffi import requests as cf_requests
@@ -45,6 +59,13 @@ except ImportError:
         print("[!] cloudscraper not installed - run: pip install cloudscraper")
         HTTP_ENGINE = "requests"
         print("[!] Using standard requests - limited Cloudflare bypass")
+
+try:
+    import pyppeteer
+    PYPPETEER_AVAILABLE = True
+    print("[+] pyppeteer loaded - headless browser fallback ACTIVE")
+except ImportError:
+    print("[!] pyppeteer not installed - run: pip install pyppeteer")
 
 from bs4 import BeautifulSoup as _BeautifulSoup
 
@@ -133,8 +154,12 @@ def init_session(proxy=None, impersonate=True, engine=None):
             HTTP_ENGINE = 'curl_cffi'
         elif engine == 'cloudscraper' and CLOUDSCRAPER_AVAILABLE:
             HTTP_ENGINE = 'cloudscraper'
+        elif engine == 'httpx' and HTTPX_AVAILABLE:
+            HTTP_ENGINE = 'httpx'
+        elif engine == 'browser' and PYPPETEER_AVAILABLE:
+            HTTP_ENGINE = 'browser'
         else:
-            HTTP_ENGINE = 'requests'
+            HTTP_ENGINE = 'requests' if engine in ('requests', 'browser') else HTTP_ENGINE
 
     headers = get_headers()
 
@@ -158,6 +183,16 @@ def init_session(proxy=None, impersonate=True, engine=None):
             SESSION.proxies = {"http": proxy, "https": proxy}
         print("[+] Session: cloudscraper with JS challenge solver")
 
+    elif HTTP_ENGINE == "httpx" and HTTPX_AVAILABLE:
+        SESSION = httpx.Client(http2=True, headers=headers, timeout=30.0, follow_redirects=True)
+        if proxy:
+            SESSION.proxies = {"http://": proxy, "https://": proxy}
+        print("[+] Session: httpx with HTTP/2 support")
+
+    elif HTTP_ENGINE == "browser" and PYPPETEER_AVAILABLE:
+        SESSION = None
+        print("[+] Session: headless browser fallback with pyppeteer")
+
     else:
         SESSION = requests.Session()
         SESSION.headers.update(headers)
@@ -165,19 +200,43 @@ def init_session(proxy=None, impersonate=True, engine=None):
             SESSION.proxies = {"http": proxy, "https": proxy}
         print("[!] Session: standard requests (limited bypass)")
 
-    # Load saved cookies if available
-    cookie_path = os.path.expanduser("~/.duke2_cookies.json")
-    if os.path.exists(cookie_path):
-        try:
-            with open(cookie_path, 'r') as f:
-                cookies = json.load(f)
-                for name, value in cookies.items():
-                    SESSION.cookies.set(name, value)
-            print(f"[+] Loaded {len(cookies)} cookies from {cookie_path}")
-        except Exception as e:
-            print(f"[!] Failed to load cookies: {e}")
+    # Load saved cookies if available when a requests-like session exists
+    if SESSION is not None and hasattr(SESSION, 'cookies'):
+        cookie_path = os.path.expanduser("~/.duke2_cookies.json")
+        if os.path.exists(cookie_path):
+            try:
+                with open(cookie_path, 'r') as f:
+                    cookies = json.load(f)
+                    for name, value in cookies.items():
+                        SESSION.cookies.set(name, value)
+                print(f"[+] Loaded {len(cookies)} cookies from {cookie_path}")
+            except Exception as e:
+                print(f"[!] Failed to load cookies: {e}")
 
     return SESSION
+
+
+def _browser_fetch(url, headers, timeout=30):
+    async def _fetch():
+        browser = await pyppeteer.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        )
+        page = await browser.newPage()
+        await page.setUserAgent(headers.get("User-Agent", "Mozilla/5.0"))
+        extra_headers = {k: v for k, v in headers.items() if k.lower() != "user-agent"}
+        if extra_headers:
+            await page.setExtraHTTPHeaders(extra_headers)
+        await page.goto(url, {"waitUntil": "networkidle2", "timeout": timeout * 1000})
+        content = await page.content()
+        await browser.close()
+        return content
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_fetch())
+    finally:
+        loop.close()
 
 
 def smart_retry_request(url, max_retries=5, backoff=2, timeout=30):
@@ -222,8 +281,16 @@ def smart_retry_request(url, max_retries=5, backoff=2, timeout=30):
     return None
 
 
+def browser_get_page_content(url, timeout=30):
+    headers = get_headers()
+    return _browser_fetch(url, headers, timeout)
+
+
 def get_page_content(url):
     """Fetch page content with Cloudflare bypass"""
+    if HTTP_ENGINE == "browser" and PYPPETEER_AVAILABLE:
+        return browser_get_page_content(url, timeout=30)
+
     response = smart_retry_request(url)
     if response is None:
         raise Exception(f"Failed to fetch {url} after all retries")
@@ -884,7 +951,9 @@ def main():
     print("1. Auto (best available)")
     print("2. curl_cffi (TLS impersonation - fastest)")
     print("3. cloudscraper (JS challenge solver)")
-    print("4. Standard requests (no bypass)")
+    print("4. httpx (HTTP/2, browser-like transport)")
+    print("5. browser (headless browser fallback)")
+    print("6. Standard requests (no bypass)")
     bypass_choice = input("➡️ Select (default 1): ").strip() or "1"
     engine = None
     if bypass_choice == "2":
@@ -892,6 +961,10 @@ def main():
     elif bypass_choice == "3":
         engine = 'cloudscraper'
     elif bypass_choice == "4":
+        engine = 'httpx'
+    elif bypass_choice == "5":
+        engine = 'browser'
+    elif bypass_choice == "6":
         engine = 'requests'
 
     # External viewer option
