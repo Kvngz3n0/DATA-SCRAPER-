@@ -15,6 +15,7 @@ import hashlib
 import threading
 import subprocess
 import base64
+import requests
 from urllib.parse import urljoin, urlparse, unquote
 from queue import Queue
 
@@ -23,20 +24,25 @@ from queue import Queue
 # Falls back to requests + cloudscraper if curl_cffi unavailable
 
 HTTP_ENGINE = "requests"  # default, will try to upgrade
+CF_AVAILABLE = False
+CLOUDSCRAPER_AVAILABLE = False
+cf_requests = None
+cloudscraper = None
 
 try:
     from curl_cffi import requests as cf_requests
+    CF_AVAILABLE = True
     HTTP_ENGINE = "curl_cffi"
     print("[+] curl_cffi loaded - TLS fingerprint impersonation ACTIVE")
 except ImportError:
     print("[!] curl_cffi not installed - run: pip install curl-cffi")
     try:
         import cloudscraper
+        CLOUDSCRAPER_AVAILABLE = True
         HTTP_ENGINE = "cloudscraper"
         print("[+] cloudscraper loaded - Cloudflare JS challenge bypass ACTIVE")
     except ImportError:
         print("[!] cloudscraper not installed - run: pip install cloudscraper")
-        import requests
         HTTP_ENGINE = "requests"
         print("[!] Using standard requests - limited Cloudflare bypass")
 
@@ -118,20 +124,28 @@ def get_headers():
     }
 
 
-def init_session(proxy=None, impersonate=True):
+def init_session(proxy=None, impersonate=True, engine=None):
     """Initialize HTTP session with Cloudflare bypass capabilities"""
     global SESSION, COOKIE_JAR, HTTP_ENGINE
 
+    if engine:
+        if engine == 'curl_cffi' and CF_AVAILABLE:
+            HTTP_ENGINE = 'curl_cffi'
+        elif engine == 'cloudscraper' and CLOUDSCRAPER_AVAILABLE:
+            HTTP_ENGINE = 'cloudscraper'
+        else:
+            HTTP_ENGINE = 'requests'
+
     headers = get_headers()
 
-    if HTTP_ENGINE == "curl_cffi" and impersonate:
+    if HTTP_ENGINE == "curl_cffi" and impersonate and CF_AVAILABLE:
         SESSION = cf_requests.Session(impersonate="chrome")
         SESSION.headers.update(headers)
         if proxy:
             SESSION.proxies = {"http": proxy, "https": proxy}
         print("[+] Session: curl_cffi with Chrome TLS impersonation")
 
-    elif HTTP_ENGINE == "cloudscraper":
+    elif HTTP_ENGINE == "cloudscraper" and CLOUDSCRAPER_AVAILABLE:
         SESSION = cloudscraper.create_scraper(
             browser={
                 'browser': 'chrome',
@@ -172,10 +186,7 @@ def smart_retry_request(url, max_retries=5, backoff=2, timeout=30):
 
     for attempt in range(max_retries):
         try:
-            if HTTP_ENGINE == "curl_cffi":
-                response = SESSION.get(url, timeout=timeout, allow_redirects=True)
-            else:
-                response = SESSION.get(url, timeout=timeout, allow_redirects=True)
+            response = SESSION.get(url, timeout=timeout, allow_redirects=True)
 
             if response.status_code == 200:
                 return response
@@ -199,14 +210,13 @@ def smart_retry_request(url, max_retries=5, backoff=2, timeout=30):
             print(f"[!] Request failed (attempt {attempt + 1}/{max_retries}): {e}")
             time.sleep(wait_time)
 
-            # Fallback: try requests if curl_cffi fails
             if HTTP_ENGINE == "curl_cffi" and attempt == max_retries - 2:
                 print("[*] Attempting fallback to standard requests...")
                 try:
                     r = requests.get(url, headers=get_headers(), timeout=timeout)
                     if r.status_code == 200:
                         return r
-                except:
+                except Exception:
                     pass
 
     return None
@@ -876,26 +886,40 @@ def main():
     print("3. cloudscraper (JS challenge solver)")
     print("4. Standard requests (no bypass)")
     bypass_choice = input("➡️ Select (default 1): ").strip() or "1"
-    
+    engine = None
+    if bypass_choice == "2":
+        engine = 'curl_cffi'
+    elif bypass_choice == "3":
+        engine = 'cloudscraper'
+    elif bypass_choice == "4":
+        engine = 'requests'
+
     # External viewer option
     print("\n📱 External viewer:")
     print("1. No - download only")
     print("2. Yes - open each file after download (Android: termux-open)")
     viewer_choice = input("➡️ Select (default 1): ").strip() or "1"
     use_external_viewer = (viewer_choice == "2")
-    
+
     # Per-type limits
     max_per_type = {}
+    if not media_types:
+        media_types = list(MEDIA_EXTENSIONS.keys())
     for mtype in media_types:
         n = input(f"\n🛡️ Max {mtype} to download (0 = no limit): ")
         max_per_type[mtype] = int(n or 0)
-    
+
     # Initialize session
     print("\n" + "=" * 60)
-    init_session(proxy=proxy)
-    
+    init_session(proxy=proxy, engine=engine)
+
     # Set save directory
-    save_dir = "/sdcard/Download/Duke2"
+    if os.path.exists('/sdcard/Download'):
+        save_dir = '/sdcard/Download/Duke2'
+    else:
+        save_dir = os.path.expanduser('~/Downloads/Duke2')
+        if not os.path.exists(save_dir):
+            save_dir = os.path.expanduser('~/Duke2')
     os.makedirs(save_dir, exist_ok=True)
     
     # Start crawl
