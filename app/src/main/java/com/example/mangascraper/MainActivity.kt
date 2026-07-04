@@ -35,6 +35,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -89,12 +90,21 @@ fun AppScreen() {
     var maxDepth by remember { mutableStateOf("2") }
     var maxPages by remember { mutableStateOf("20") }
     var sameDomain by remember { mutableStateOf(true) }
+    var premiumMode by remember { mutableStateOf(BuildConfig.IS_PREMIUM_RELEASE) }
+    var premiumDomainsText by remember { mutableStateOf("onlyfans.com,fansly.com") }
     val selectedTypes = remember { mutableStateListOf(MediaType.IMAGES, MediaType.VIDEOS, MediaType.AUDIO) }
     var isRunning by remember { mutableStateOf(false) }
     var logMessages = remember { mutableStateListOf<String>() }
     var results by remember { mutableStateOf<List<MediaResult>>(emptyList()) }
     val scope = rememberCoroutineScope()
     var showResultCount by remember { mutableStateOf(false) }
+
+    LaunchedEffect(premiumMode, premiumDomainsText) {
+        scraper.configurePremiumMode(
+            premiumMode,
+            premiumDomainsText.split(',').map { it.trim() }.filter { it.isNotBlank() }
+        )
+    }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -179,6 +189,23 @@ fun AppScreen() {
             }
 
             item {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("Premium-site mode", modifier = Modifier.weight(1f))
+                    Switch(checked = premiumMode, onCheckedChange = { premiumMode = it })
+                }
+            }
+
+            item {
+                OutlinedTextField(
+                    value = premiumDomainsText,
+                    onValueChange = { premiumDomainsText = it },
+                    label = { Text("Premium domains") },
+                    placeholder = { Text("onlyfans.com, fansly.com") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            item {
                 Text("Media types", fontWeight = FontWeight.Bold)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MediaType.values().forEach { type ->
@@ -223,6 +250,8 @@ fun AppScreen() {
                                 maxPages = maxPages.toIntOrNull() ?: 20,
                                 sameDomain = sameDomain,
                                 destinationTreeUri = destinationUri,
+                                premiumModeEnabled = premiumMode,
+                                premiumDomains = premiumDomainsText.split(',').map { it.trim() }.filter { it.isNotBlank() },
                                 progress = { message ->
                                     logMessages.add(message)
                                 }

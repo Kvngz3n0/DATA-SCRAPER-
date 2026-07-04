@@ -19,6 +19,7 @@ This repo now includes `Duke2_Enhanced.py`, a more capable version with Cloudfla
 - Media extraction from lazy-loaded content and meta tags
 - Download queue with threaded downloads
 - Save path detection for Linux and Android/Termux
+- Separate premium-mode build for premium/gated sites such as OnlyFans-style domains
 
 ## Install
 
@@ -27,6 +28,8 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+
+### Python script
 
 ```bash
 python Duke2_Enhanced.py
@@ -38,6 +41,38 @@ If you want, make the script executable first:
 chmod +x Duke2_Enhanced.py
 ./Duke2_Enhanced.py
 ```
+
+### Android app
+
+- Standard release: install the standard APK for general scraping.
+- Premium release: install the premium APK when you want to target premium or gated sites.
+
+## Premium mode step by step
+
+1. Install the premium APK from the GitHub release assets.
+2. Open the app and paste the starting URL into the Start URL field.
+3. Turn on Premium-site mode with the switch.
+4. In the Premium domains field, enter the domains you want to treat as premium sites, for example:
+   - `onlyfans.com`
+   - `fansly.com`
+   - `adultsite.example`
+5. Choose your media types and crawl limits.
+6. Press Start Crawl.
+7. The app will apply premium-style request headers for matching domains and try a broader media extraction pass for embedded or hidden media links.
+
+### When to use premium mode
+
+Use premium mode when the target site:
+- uses premium/gated media endpoints,
+- blocks normal browser requests,
+- hides media behind script or JSON payloads,
+- or requires a more browser-like request profile.
+
+### Notes for premium mode
+
+- Premium mode is best used with a valid starting URL and a clear target domain.
+- If a site still blocks access, add a proxy or use the browser fallback path in the Python scraper.
+- The premium mode does not bypass account authentication by itself; it only improves the request profile and media detection path.
 
 ## Interactive tutorial
 
@@ -97,3 +132,4 @@ chmod +x Duke2_Enhanced.py
 
 - Use the updated `Duke2_Enhanced.py` script for the latest features.
 - The old `Duke.py` script is no longer required.
+- For premium/gated content work, use the premium APK or the premium-mode settings in the app.

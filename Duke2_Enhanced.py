@@ -17,6 +17,7 @@ import subprocess
 import base64
 import asyncio
 import types
+import re
 import requests
 from urllib.parse import urljoin, urlparse, unquote
 from queue import Queue
@@ -105,6 +106,8 @@ MAX_THREADS = 8
 
 SESSION = None
 COOKIE_JAR = None
+ONLYFANS_AUTH = None
+ONLYFANS_AUTH_LOADED = False
 
 # ── HTTP SESSION MANAGER ──────────────────────────────────────────────────
 
@@ -143,6 +146,104 @@ def get_headers():
         "Connection": "keep-alive",
         "Cache-Control": "max-age=0",
     }
+
+
+def build_onlyfans_headers(sess=None, auth_id=None, auth_uid_=None, user_agent=None, app_token=None):
+    """Build a browser-like header set for OnlyFans authentication"""
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "origin": "https://onlyfans.com",
+        "referer": "https://onlyfans.com/",
+        "x-requested-with": "XMLHttpRequest",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    }
+
+    if user_agent:
+        headers["user-agent"] = user_agent
+    else:
+        headers["user-agent"] = get_headers().get("User-Agent", "Mozilla/5.0")
+
+    if app_token:
+        headers["app-token"] = app_token
+
+    cookies = []
+    if sess:
+        cookies.append(f"sess={sess}")
+    if auth_id:
+        cookies.append(f"auth_id={auth_id}")
+    if auth_uid_:
+        cookies.append(f"auth_uid_={auth_uid_}")
+
+    if cookies:
+        headers["cookie"] = "; ".join(cookies)
+
+    return headers
+
+
+def load_onlyfans_auth():
+    """Load OnlyFans auth fields from environment or a local config file"""
+    global ONLYFANS_AUTH, ONLYFANS_AUTH_LOADED
+
+    if ONLYFANS_AUTH_LOADED:
+        return ONLYFANS_AUTH
+
+    auth = {
+        "sess": os.environ.get("ONLYFANS_SESS") or "",
+        "auth_id": os.environ.get("ONLYFANS_AUTH_ID") or "",
+        "auth_uid_": os.environ.get("ONLYFANS_AUTH_UID") or "",
+        "app_token": os.environ.get("ONLYFANS_APP_TOKEN") or "",
+        "user_agent": os.environ.get("ONLYFANS_USER_AGENT") or "",
+    }
+
+    config_path = os.path.expanduser("~/.duke2_onlyfans.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                saved = json.load(f)
+            auth.update({k: v for k, v in saved.items() if v})
+        except Exception:
+            pass
+
+    if any(auth.values()):
+        ONLYFANS_AUTH = auth
+    else:
+        ONLYFANS_AUTH = None
+
+    ONLYFANS_AUTH_LOADED = True
+    return ONLYFANS_AUTH
+
+
+def apply_onlyfans_auth(url):
+    """Attach OnlyFans auth headers/cookies to the active session when applicable"""
+    global SESSION
+
+    if not url:
+        return
+
+    parsed = urlparse(url)
+    if parsed.netloc.lower() not in {"onlyfans.com", "www.onlyfans.com"}:
+        return
+
+    auth = load_onlyfans_auth()
+    if not auth:
+        return
+
+    headers = build_onlyfans_headers(
+        sess=auth.get("sess"),
+        auth_id=auth.get("auth_id"),
+        auth_uid_=auth.get("auth_uid_"),
+        user_agent=auth.get("user_agent"),
+        app_token=auth.get("app_token"),
+    )
+
+    if SESSION is not None:
+        if hasattr(SESSION, "headers"):
+            SESSION.headers.update(headers)
+        if hasattr(SESSION, "cookies"):
+            for name, value in {k: v for k, v in [c.split("=", 1) for c in headers.get("cookie", "").split("; ") if "=" in c]}.items():
+                SESSION.cookies.set(name, value)
 
 
 def init_session(proxy=None, impersonate=True, engine=None):
@@ -243,6 +344,8 @@ def smart_retry_request(url, max_retries=5, backoff=2, timeout=30):
     """Smart request with exponential backoff and engine fallback"""
     global SESSION, HTTP_ENGINE
 
+    apply_onlyfans_auth(url)
+
     for attempt in range(max_retries):
         try:
             response = SESSION.get(url, timeout=timeout, allow_redirects=True)
@@ -287,14 +390,25 @@ def browser_get_page_content(url, timeout=30):
 
 
 def get_page_content(url):
-    """Fetch page content with Cloudflare bypass"""
+    """Fetch page content with Cloudflare bypass and browser fallback"""
     if HTTP_ENGINE == "browser" and PYPPETEER_AVAILABLE:
         return browser_get_page_content(url, timeout=30)
 
-    response = smart_retry_request(url)
-    if response is None:
-        raise Exception(f"Failed to fetch {url} after all retries")
-    return response.text
+    try:
+        response = smart_retry_request(url)
+        if response is not None and response.text:
+            return response.text
+    except Exception as exc:
+        print(f"[!] Requests path failed: {exc}")
+
+    if PYPPETEER_AVAILABLE:
+        print("[*] Falling back to headless browser rendering")
+        try:
+            return browser_get_page_content(url, timeout=45)
+        except Exception as exc:
+            print(f"[!] Browser fallback failed: {exc}")
+
+    raise Exception(f"Failed to fetch {url} after all retries")
 
 
 # ── ENHANCED MEDIA EXTRACTION ─────────────────────────────────────────────
@@ -308,7 +422,7 @@ def is_media_file(url, extensions):
 def extract_lazy_media(soup, base_url, mtype):
     """Extract media from lazy-loaded / JS-rendered attributes"""
     links = set()
-    
+
     # All elements with common media containers
     elements = soup.find_all(['img', 'video', 'audio', 'source', 'picture', 
                                'div', 'span', 'a', 'meta', 'link'])
@@ -347,9 +461,9 @@ def extract_lazy_media(soup, base_url, mtype):
 
 
 def extract_media_links(soup, base_url, mtype):
-    """Enhanced media extraction with lazy-load and locked content support"""
+    """Enhanced media extraction with lazy-load, script payload, and locked-content support"""
     links = set()
-    
+
     if mtype == 'images':
         # Standard img tags
         tags = soup.find_all(['img', 'source', 'picture'])
@@ -371,6 +485,14 @@ def extract_media_links(soup, base_url, mtype):
             content = meta.get('content')
             if content:
                 links.add(urljoin(base_url, content))
+
+        # Script-tag JSON and inline payloads for embedded media
+        for script in soup.find_all('script'):
+            payload = script.string or ''
+            if not payload:
+                continue
+            for match in re.findall(r'https?://[^\s"\']+\.(?:jpg|jpeg|png|gif|webp|avif|bmp|svg)', payload, re.I):
+                links.add(urljoin(base_url, match))
                 
     elif mtype in ['videos', 'audio']:
         tags = soup.find_all(['video', 'audio', 'source'])
@@ -386,6 +508,13 @@ def extract_media_links(soup, base_url, mtype):
             content = meta.get('content')
             if content:
                 links.add(urljoin(base_url, content))
+
+        for script in soup.find_all('script'):
+            payload = script.string or ''
+            if not payload:
+                continue
+            for match in re.findall(r'https?://[^\s"\']+\.(?:mp4|webm|m3u8|mov|m4v|ogg|wav|mp3)', payload, re.I):
+                links.add(urljoin(base_url, match))
         
         # iframe video embeds (YouTube, Vimeo, etc.)
         for iframe in soup.find_all('iframe', src=True):
@@ -437,7 +566,7 @@ def extract_links(soup, base_url, same_domain):
 # ── DOWNLOAD WORKER ───────────────────────────────────────────────────────
 
 def download_worker(save_dir, min_size_kb, max_media_per_type, use_external_viewer=False):
-    """Download worker with external viewer support"""
+    """Download worker with external viewer support and richer media handling"""
     media_count = {}
     
     while not download_queue.empty():
@@ -469,6 +598,12 @@ def download_worker(save_dir, min_size_kb, max_media_per_type, use_external_view
                 ext = ext.split('?')[0]
                 filename = f"file_{hashlib.md5(url.encode()).hexdigest()[:8]}{ext}"
 
+            # Prefer media-specific extension if the URL is a known media path
+            if not os.path.splitext(filename)[1] and mtype in MEDIA_EXTENSIONS:
+                guessed_ext = next((ext for ext in MEDIA_EXTENSIONS[mtype] if url.lower().endswith(ext)), None)
+                if guessed_ext:
+                    filename = f"{os.path.splitext(filename)[0]}{guessed_ext}" 
+
             folder = os.path.join(save_dir, mtype)
             os.makedirs(folder, exist_ok=True)
             filepath = os.path.join(folder, filename)
@@ -476,6 +611,9 @@ def download_worker(save_dir, min_size_kb, max_media_per_type, use_external_view
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(16384):
                     f.write(chunk)
+
+            if os.path.getsize(filepath) < 1024 and mtype in {'images', 'videos', 'audio'}:
+                print(f"[!] Downloaded file looks tiny for {url}; possible blocked content")
 
             with lock:
                 downloaded_media.append({

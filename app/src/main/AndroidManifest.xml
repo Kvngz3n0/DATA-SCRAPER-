@@ -5,7 +5,7 @@
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="true"
-        android:label="Webscraper"
+        android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.MangaScraper">
         <activity

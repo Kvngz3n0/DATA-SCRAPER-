@@ -37,6 +37,8 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         maxPages: Int,
         sameDomain: Boolean,
         destinationTreeUri: Uri?,
+        premiumModeEnabled: Boolean,
+        premiumDomains: List<String>,
         progress: (String) -> Unit
     ): List<MediaResult> = withContext(Dispatchers.IO) {
         val normalizedUrl = buildUrl(startUrl) ?: return@withContext emptyList()
@@ -50,6 +52,7 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         val destinationRootFolder = destinationTreeUri?.let { uri ->
             DocumentFile.fromTreeUri(context, uri)
         }
+        scraper.configurePremiumMode(premiumModeEnabled, premiumDomains)
 
         while (queue.isNotEmpty() && visited.size < maxPages) {
             val (url, depth) = queue.removeFirst()
@@ -60,7 +63,7 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                 val html = scraper.fetchHtml(url)
                 val document = Jsoup.parse(html, url)
                 visited.add(url)
-                val mediaLinks = extractMediaLinks(document, types)
+                val mediaLinks = extractMediaLinks(document, types, premiumModeEnabled, premiumDomains)
 
                 for ((link, type) in mediaLinks) {
                     if (results.count { it.type == type } >= maxPages) break
@@ -152,14 +155,34 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         return raw.replace(Regex("[^A-Za-z0-9._-]"), "_")
     }
 
-    private fun extractMediaLinks(document: org.jsoup.nodes.Document, types: Set<MediaType>): List<Pair<String, MediaType>> {
+    private fun extractMediaLinks(
+        document: org.jsoup.nodes.Document,
+        types: Set<MediaType>,
+        premiumModeEnabled: Boolean,
+        premiumDomains: List<String>
+    ): List<Pair<String, MediaType>> {
         val links = mutableListOf<Pair<String, MediaType>>()
         val base = document.baseUri()
 
         if (types.contains(MediaType.IMAGES)) {
-            document.select("img[src], source[src], meta[property=og:image], meta[name=og:image]").forEach { element ->
+            val imageSelectors = listOf(
+                "img[src]",
+                "img[data-src]",
+                "img[data-lazy-src]",
+                "img[data-original]",
+                "source[src]",
+                "meta[property=og:image]",
+                "meta[name=og:image]",
+                "[data-src]",
+                "[data-media]"
+            )
+            document.select(imageSelectors.joinToString(", ")).forEach { element ->
                 val candidate = when {
                     element.hasAttr("src") -> element.attr("abs:src")
+                    element.hasAttr("data-src") -> element.attr("abs:data-src")
+                    element.hasAttr("data-lazy-src") -> element.attr("abs:data-lazy-src")
+                    element.hasAttr("data-original") -> element.attr("abs:data-original")
+                    element.hasAttr("data-media") -> element.attr("abs:data-media")
                     element.hasAttr("content") -> element.attr("abs:content")
                     else -> null
                 }
@@ -168,8 +191,24 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         }
 
         if (types.contains(MediaType.VIDEOS) || types.contains(MediaType.AUDIO)) {
-            document.select("video[src], audio[src], source[src]").forEach { element ->
-                val src = element.attr("abs:src")
+            val mediaSelectors = listOf(
+                "video[src]",
+                "video[data-src]",
+                "audio[src]",
+                "audio[data-src]",
+                "source[src]",
+                "source[data-src]",
+                "[data-video]",
+                "[data-poster]"
+            )
+            document.select(mediaSelectors.joinToString(", ")).forEach { element ->
+                val src = when {
+                    element.hasAttr("src") -> element.attr("abs:src")
+                    element.hasAttr("data-src") -> element.attr("abs:data-src")
+                    element.hasAttr("data-video") -> element.attr("abs:data-video")
+                    element.hasAttr("data-poster") -> element.attr("abs:data-poster")
+                    else -> ""
+                }
                 if (src.isNotBlank()) {
                     val type = when {
                         types.contains(MediaType.VIDEOS) && typeMatches(src, MediaType.VIDEOS) -> MediaType.VIDEOS
@@ -191,6 +230,18 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                         links.add(href to type)
                     }
                 }
+            }
+        }
+
+        if (premiumModeEnabled) {
+            document.select("script, [data-url], [data-href]").forEach { element ->
+                val candidate = when {
+                    element.hasAttr("data-url") -> element.attr("abs:data-url")
+                    element.hasAttr("data-href") -> element.attr("abs:data-href")
+                    element.hasAttr("src") -> element.attr("abs:src")
+                    else -> null
+                }
+                candidate?.takeIf { it.isNotBlank() && (typeMatches(it, MediaType.IMAGES) || typeMatches(it, MediaType.VIDEOS) || typeMatches(it, MediaType.AUDIO)) }?.let { links.add(it to MediaType.IMAGES) }
             }
         }
 

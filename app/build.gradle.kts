@@ -16,8 +16,23 @@ android {
         versionName = "1.01"
     }
 
+    flavorDimensions += "release"
+    productFlavors {
+        create("standard") {
+            dimension = "release"
+            buildConfigField("boolean", "IS_PREMIUM_RELEASE", "false")
+        }
+        create("premium") {
+            dimension = "release"
+            applicationIdSuffix = ".premium"
+            versionNameSuffix = "-premium"
+            buildConfigField("boolean", "IS_PREMIUM_RELEASE", "true")
+        }
+    }
+
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

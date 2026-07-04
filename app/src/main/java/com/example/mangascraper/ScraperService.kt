@@ -10,6 +10,7 @@ import org.jsoup.Jsoup
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 class ScraperService(
@@ -17,6 +18,9 @@ class ScraperService(
     private val proxyUrl: String? = null,
     private val userAgents: List<String> = DEFAULT_USER_AGENTS
 ) {
+    private var premiumModeEnabled: Boolean = false
+    private var premiumDomains: Set<String> = emptySet()
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .cache(cacheDir?.let { Cache(it, 50L * 1024L * 1024L) })
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -26,13 +30,10 @@ class ScraperService(
         .proxy(buildProxy(proxyUrl))
         .addInterceptor { chain ->
             val original = chain.request()
-            val request = original.newBuilder()
-                .header("User-Agent", pickRandomUserAgent())
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .header("Referer", original.url.host)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .build()
-            chain.proceed(request)
+            val headers = buildHeaders(original.url.toString())
+            val requestBuilder = original.newBuilder()
+            headers.forEach { (name, value) -> requestBuilder.header(name, value) }
+            chain.proceed(requestBuilder.build())
         }
         .build()
 
@@ -66,6 +67,11 @@ class ScraperService(
             .distinct()
     }
 
+    fun configurePremiumMode(enabled: Boolean, domains: List<String>) {
+        premiumModeEnabled = enabled
+        premiumDomains = domains.map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
+    }
+
     fun setProxy(url: String?) {
         // The client is immutable here; callers can create a new service instance with the proxy.
     }
@@ -82,6 +88,27 @@ class ScraperService(
     }
 
     private fun pickRandomUserAgent(): String = userAgents.random()
+
+    private fun buildHeaders(url: String): Map<String, String> {
+        val host = runCatching { URI(url).host.orEmpty() }.getOrDefault("")
+        val isPremiumSite = premiumModeEnabled && premiumDomains.any { domain ->
+            host.equals(domain, ignoreCase = true) || host.endsWith(".$domain", ignoreCase = true)
+        }
+
+        return buildMap {
+            put("User-Agent", pickRandomUserAgent())
+            put("Accept-Language", "en-US,en;q=0.9")
+            put("Referer", if (host.isNotBlank()) "https://$host/" else "https://example.com/")
+            put("Accept", if (isPremiumSite) "application/json,text/plain, */*" else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            if (isPremiumSite) {
+                put("Origin", if (host.isNotBlank()) "https://$host" else "https://onlyfans.com")
+                put("X-Requested-With", "XMLHttpRequest")
+                put("Sec-Fetch-Dest", "empty")
+                put("Sec-Fetch-Mode", "cors")
+                put("Sec-Fetch-Site", "same-origin")
+            }
+        }
+    }
 
     private inline fun <T> fetchWithRetry(
         url: String,
