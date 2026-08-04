@@ -57,7 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.launch
 
-private enum class AppScreenMode { MASS_SCRAPER, SINGLE_MEDIA }
+private enum class AppScreenMode { MASS_SCRAPER, SINGLE_MEDIA, YTDLP }
 
 private val BlackGoldColorScheme = darkColorScheme(
     primary = Color(0xFFFFD700),
@@ -113,6 +113,7 @@ fun AppScreen() {
     var singleMediaUrl by remember { mutableStateOf("") }
     var singleMediaType by remember { mutableStateOf(MediaType.VIDEOS) }
     var singleMediaQuality by remember { mutableStateOf("best") }
+    var ytDlpQuality by remember { mutableStateOf("best") }
     var qualityMenuExpanded by remember { mutableStateOf(false) }
 
     val qualityOptions = remember(singleMediaType) {
@@ -120,6 +121,14 @@ fun AppScreen() {
             listOf("best", "320kbps", "192kbps", "128kbps", "64kbps")
         } else {
             listOf("best", "2160p", "1440p", "1080p", "720p", "480p", "360p")
+        }
+    }
+
+    val ytDlpQualityOptions = remember(singleMediaType) {
+        if (singleMediaType == MediaType.AUDIO) {
+            listOf("bestaudio", "192kbps", "128kbps", "64kbps")
+        } else {
+            listOf("best", "bestvideo+bestaudio", "1080p", "720p", "480p", "360p")
         }
     }
 
@@ -182,6 +191,15 @@ fun AppScreen() {
                     },
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
+                NavigationDrawerItem(
+                    label = { Text("YT-DLP download") },
+                    selected = selectedMode == AppScreenMode.YTDLP,
+                    onClick = {
+                        selectedMode = AppScreenMode.YTDLP
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
             }
         }
     ) {
@@ -190,10 +208,10 @@ fun AppScreen() {
                 TopAppBar(
                     title = {
                         Text(
-                            if (selectedMode == AppScreenMode.MASS_SCRAPER) {
-                                "Mass Site Scraper"
-                            } else {
-                                "Single Media Download"
+                            when (selectedMode) {
+                                AppScreenMode.MASS_SCRAPER -> "Mass Site Scraper"
+                                AppScreenMode.SINGLE_MEDIA -> "Single Media Download"
+                                AppScreenMode.YTDLP -> "YT-DLP Download"
                             }
                         )
                     },
@@ -454,6 +472,95 @@ fun AppScreen() {
                                 enabled = !isRunning
                             ) {
                                 Text(if (isRunning) "Downloading..." else "Download selected media")
+                            }
+                        }
+                    }
+
+                    AppScreenMode.YTDLP -> {
+                        item {
+                            Text("YT-DLP streaming download", fontWeight = FontWeight.Bold)
+                        }
+
+                        item {
+                            OutlinedTextField(
+                                value = singleMediaUrl,
+                                onValueChange = { singleMediaUrl = it },
+                                label = { Text("Streaming URL") },
+                                placeholder = { Text("https://youtu.be/...") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(
+                                    onClick = { singleMediaType = MediaType.VIDEOS },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Video")
+                                }
+                                Button(
+                                    onClick = { singleMediaType = MediaType.AUDIO },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Audio")
+                                }
+                            }
+                        }
+
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                Button(onClick = { qualityMenuExpanded = true }) {
+                                    Text("Format: ${ytDlpQuality}")
+                                }
+                                DropdownMenu(
+                                    expanded = qualityMenuExpanded,
+                                    onDismissRequest = { qualityMenuExpanded = false }
+                                ) {
+                                    ytDlpQualityOptions.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option) },
+                                            onClick = {
+                                                ytDlpQuality = option
+                                                qualityMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Button(
+                                onClick = {
+                                    if (singleMediaUrl.isBlank()) {
+                                        logMessages.add("Please enter a streaming URL.")
+                                        return@Button
+                                    }
+                                    isRunning = true
+                                    logMessages.clear()
+                                    scope.launch {
+                                        val downloaded = crawler.downloadYtDlpMedia(
+                                            mediaUrl = singleMediaUrl,
+                                            mediaType = singleMediaType,
+                                            preferredQuality = ytDlpQuality,
+                                            destinationTreeUri = destinationUri,
+                                            premiumModeEnabled = premiumMode,
+                                            premiumDomains = premiumDomains,
+                                            progress = { message ->
+                                                logMessages.add(message)
+                                            }
+                                        )
+                                        isRunning = false
+                                        if (downloaded.isEmpty()) {
+                                            logMessages.add("No media was downloaded.")
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isRunning
+                            ) {
+                                Text(if (isRunning) "Downloading..." else "Download with yt-dlp")
                             }
                         }
                     }

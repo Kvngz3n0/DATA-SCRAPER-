@@ -128,8 +128,7 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         val candidateUrls = mutableListOf<String>()
         if (isUnsupportedStreamingHost(normalizedUrl)) {
             progress(
-                "Unsupported host: direct download from this URL is not supported. " +
-                    "Please use a direct media file URL (for example .mp4 or .mp3) instead."
+                "Unsupported host for direct download. Use the YT-DLP mode for streaming service URLs."
             )
             return@withContext emptyList()
         }
@@ -179,6 +178,132 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                 sourcePage = normalizedUrl
             )
         )
+    }
+
+    suspend fun downloadYtDlpMedia(
+        mediaUrl: String,
+        mediaType: MediaType,
+        preferredQuality: String,
+        destinationTreeUri: Uri?,
+        premiumModeEnabled: Boolean,
+        premiumDomains: List<String>,
+        progress: (String) -> Unit
+    ): List<MediaResult> = withContext(Dispatchers.IO) {
+        val normalizedUrl = buildUrl(mediaUrl) ?: return@withContext emptyList()
+        val destinationRootFolder = destinationTreeUri?.let { uri ->
+            DocumentFile.fromTreeUri(context, uri)
+        }
+
+        val ytDlpCommand = findYtDlpCommand(progress) ?: return@withContext emptyList()
+        val tempDir = File(context.cacheDir, "yt_dlp_temp_${System.nanoTime()}")
+        tempDir.mkdirs()
+        val outputTemplate = File(tempDir, "download.%(ext)s").absolutePath
+        val format = buildYtDlpFormat(mediaType, preferredQuality)
+
+        progress("Running yt-dlp with format $format")
+        val command = ytDlpCommand + listOf("-f", format, "-o", outputTemplate, normalizedUrl)
+        val exitCode = runCommand(command, progress)
+        if (exitCode != 0) {
+            progress("yt-dlp failed with exit code $exitCode")
+            tempDir.deleteRecursively()
+            return@withContext emptyList()
+        }
+
+        val downloadedFile = tempDir.listFiles()?.firstOrNull { it.isFile }
+        if (downloadedFile == null) {
+            progress("yt-dlp did not produce a downloadable file")
+            tempDir.deleteRecursively()
+            return@withContext emptyList()
+        }
+
+        val fileBytes = downloadedFile.readBytes()
+        val savedName = downloadedFile.name
+        val saved = if (destinationRootFolder != null && destinationRootFolder.exists()) {
+            saveToDocumentFolder(destinationRootFolder, mediaType, savedName, fileBytes)
+        } else {
+            saveToFileSystem(mediaType, chooseFilename(downloadedFile.absolutePath, mediaType), fileBytes)
+        }
+        tempDir.deleteRecursively()
+
+        if (saved == null) {
+            progress("Failed to save yt-dlp output file")
+            return@withContext emptyList()
+        }
+
+        val destinationPath = destinationRootFolder?.uri?.toString() ?: File(context.getExternalFilesDir(null), "media").absolutePath
+        progress("Saved ${mediaType.label} as $saved under $destinationPath")
+        listOf(
+            MediaResult(
+                url = normalizedUrl,
+                type = mediaType,
+                filename = saved,
+                sizeKb = fileBytes.size / 1024,
+                sourcePage = normalizedUrl
+            )
+        )
+    }
+
+    private fun findYtDlpCommand(progress: (String) -> Unit): List<String>? {
+        val candidates = listOf(
+            listOf("yt-dlp"),
+            listOf("python3", "-m", "yt_dlp"),
+            listOf("python", "-m", "yt_dlp")
+        )
+
+        candidates.forEach { candidate ->
+            try {
+                val process = ProcessBuilder(candidate + listOf("--version"))
+                    .redirectErrorStream(true)
+                    .start()
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { progress(it) }
+                }
+                if (process.waitFor() == 0) {
+                    return candidate
+                }
+            } catch (_: Exception) {
+                // ignore and try the next candidate
+            }
+        }
+
+        progress("yt-dlp is not installed or not accessible on this device.")
+        progress("Install yt-dlp or use the direct media download mode for standard file URLs.")
+        return null
+    }
+
+    private fun buildYtDlpFormat(mediaType: MediaType, preferredQuality: String): String {
+        return if (mediaType == MediaType.AUDIO) {
+            when (preferredQuality.lowercase()) {
+                "192kbps" -> "bestaudio[abr<=192]/bestaudio"
+                "128kbps" -> "bestaudio[abr<=128]/bestaudio"
+                "64kbps" -> "bestaudio[abr<=64]/bestaudio"
+                else -> "bestaudio/best"
+            }
+        } else {
+            when (preferredQuality.lowercase()) {
+                "bestvideo+bestaudio" -> "bestvideo+bestaudio/best"
+                "1080p" -> "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+                "720p" -> "bestvideo[height<=720]+bestaudio/best[height<=720]"
+                "480p" -> "bestvideo[height<=480]+bestaudio/best[height<=480]"
+                "360p" -> "bestvideo[height<=360]+bestaudio/best[height<=360]"
+                else -> "bestvideo+bestaudio/best"
+            }
+        }
+    }
+
+    private fun runCommand(command: List<String>, progress: (String) -> Unit): Int {
+        return try {
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start()
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { progress(it) }
+            }
+            process.waitFor()
+        } catch (e: Exception) {
+            progress("Failed to execute yt-dlp: ${e.message}")
+            -1
+        }
     }
 
     private fun saveToDocumentFolder(root: DocumentFile, type: MediaType, filename: String, bytes: ByteArray): String? {
