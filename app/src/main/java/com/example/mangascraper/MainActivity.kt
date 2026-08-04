@@ -136,12 +136,21 @@ fun AppScreen() {
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            destinationUri = uri
-            destinationLabel = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                )
+                destinationUri = uri
+                destinationLabel = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
+                logMessages.add("Selected folder: $destinationLabel")
+            } catch (e: Exception) {
+                destinationUri = null
+                destinationLabel = "Use default internal folder"
+                logMessages.add("Could not access the selected folder: ${e.message}")
+            }
         }
     }
 
@@ -205,16 +214,28 @@ fun AppScreen() {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    Button(
-                        onClick = { folderPickerLauncher.launch(null) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Pick download folder")
-                    }
+                    Text("Selected folder: $destinationLabel")
                 }
 
                 item {
-                    Text("Selected folder: $destinationLabel")
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = { folderPickerLauncher.launch(null) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Pick download folder")
+                        }
+                        Button(
+                            onClick = {
+                                destinationUri = null
+                                destinationLabel = "Use default internal folder"
+                                logMessages.add("Reset to default internal folder")
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Use default folder")
+                        }
+                    }
                 }
 
                 item {
