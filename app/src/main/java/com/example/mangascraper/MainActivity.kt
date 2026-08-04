@@ -140,8 +140,7 @@ fun AppScreen() {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
                 destinationUri = uri
                 destinationLabel = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
