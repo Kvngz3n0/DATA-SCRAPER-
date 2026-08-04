@@ -110,6 +110,69 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         return@withContext results
     }
 
+    suspend fun downloadSingleMedia(
+        mediaUrl: String,
+        mediaType: MediaType,
+        preferredQuality: String,
+        destinationTreeUri: Uri?,
+        premiumModeEnabled: Boolean,
+        premiumDomains: List<String>,
+        progress: (String) -> Unit
+    ): List<MediaResult> = withContext(Dispatchers.IO) {
+        val normalizedUrl = buildUrl(mediaUrl) ?: return@withContext emptyList()
+        val destinationRootFolder = destinationTreeUri?.let { uri ->
+            DocumentFile.fromTreeUri(context, uri)
+        }
+        scraper.configurePremiumMode(premiumModeEnabled, premiumDomains)
+
+        val candidateUrls = mutableListOf<String>()
+        if (looksLikeContentMedia(normalizedUrl, mediaType)) {
+            candidateUrls += normalizedUrl
+        } else {
+            try {
+                val html = scraper.fetchHtml(normalizedUrl)
+                val document = Jsoup.parse(html, normalizedUrl)
+                candidateUrls += extractMediaLinks(document, setOf(mediaType), premiumModeEnabled, premiumDomains).map { it.first }
+            } catch (e: Exception) {
+                progress("Failed to resolve media URL: ${e.message}")
+            }
+        }
+
+        val selectedUrl = MediaQualitySelector.pickPreferredMediaUrl(candidateUrls, mediaType, preferredQuality)
+            ?: return@withContext emptyList()
+
+        progress("Downloading ${mediaType.label}: $selectedUrl")
+        val bytes = scraper.fetchBytes(selectedUrl)
+        if (bytes.isEmpty()) {
+            progress("Downloaded empty payload from $selectedUrl")
+            return@withContext emptyList()
+        }
+
+        val filename = chooseFilename(selectedUrl, mediaType)
+        val saved = if (destinationRootFolder != null && destinationRootFolder.exists()) {
+            saveToDocumentFolder(destinationRootFolder, mediaType, filename, bytes)
+        } else {
+            saveToFileSystem(mediaType, filename, bytes)
+        }
+
+        if (saved == null) {
+            progress("Failed to save ${mediaType.label} file")
+            return@withContext emptyList()
+        }
+
+        val destinationPath = destinationRootFolder?.uri?.toString() ?: File(context.getExternalFilesDir(null), "media").absolutePath
+        progress("Saved ${mediaType.label} as $saved under $destinationPath")
+        listOf(
+            MediaResult(
+                url = selectedUrl,
+                type = mediaType,
+                filename = saved,
+                sizeKb = bytes.size / 1024,
+                sourcePage = normalizedUrl
+            )
+        )
+    }
+
     private fun saveToDocumentFolder(root: DocumentFile, type: MediaType, filename: String, bytes: ByteArray): String? {
         val typeDirectory = root.findFile(type.label) as? DocumentFile ?: root.createDirectory(type.label)
         if (typeDirectory == null || !typeDirectory.isDirectory) {
@@ -174,7 +237,9 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                 "meta[property=og:image]",
                 "meta[name=og:image]",
                 "[data-src]",
-                "[data-media]"
+                "[data-media]",
+                "[srcset]",
+                "[data-srcset]"
             )
             document.select(imageSelectors.joinToString(", ")).forEach { element ->
                 val candidate = when {
@@ -183,10 +248,19 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                     element.hasAttr("data-lazy-src") -> element.attr("abs:data-lazy-src")
                     element.hasAttr("data-original") -> element.attr("abs:data-original")
                     element.hasAttr("data-media") -> element.attr("abs:data-media")
+                    element.hasAttr("srcset") -> element.attr("srcset")
+                    element.hasAttr("data-srcset") -> element.attr("data-srcset")
                     element.hasAttr("content") -> element.attr("abs:content")
                     else -> null
                 }
-                candidate?.takeIf { it.isNotBlank() }?.let { links.add(it to MediaType.IMAGES) }
+                candidate?.let { value ->
+                    val normalizedCandidates = extractCandidatesFromAttribute(value)
+                    normalizedCandidates.forEach { candidateUrl ->
+                        if (looksLikeContentMedia(candidateUrl, MediaType.IMAGES)) {
+                            links.add(candidateUrl to MediaType.IMAGES)
+                        }
+                    }
+                }
             }
         }
 
@@ -241,11 +315,58 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
                     element.hasAttr("src") -> element.attr("abs:src")
                     else -> null
                 }
-                candidate?.takeIf { it.isNotBlank() && (typeMatches(it, MediaType.IMAGES) || typeMatches(it, MediaType.VIDEOS) || typeMatches(it, MediaType.AUDIO)) }?.let { links.add(it to MediaType.IMAGES) }
+                candidate?.let { value ->
+                    extractCandidatesFromAttribute(value).forEach { candidateUrl ->
+                        val type = when {
+                            typeMatches(candidateUrl, MediaType.VIDEOS) -> MediaType.VIDEOS
+                            typeMatches(candidateUrl, MediaType.AUDIO) -> MediaType.AUDIO
+                            typeMatches(candidateUrl, MediaType.IMAGES) -> MediaType.IMAGES
+                            else -> null
+                        }
+                        if (type != null && looksLikeContentMedia(candidateUrl, type)) {
+                            links.add(candidateUrl to type)
+                        }
+                    }
+                }
+            }
+
+            document.select("script").forEach { script ->
+                val scriptText = script.data()
+                val mediaRegex = Regex("https?://[^\\s\"'<>]+\\.(jpg|jpeg|png|gif|webp|avif|mp4|webm|mov|mkv|m4v|ogg|wav|mp3)", RegexOption.IGNORE_CASE)
+                mediaRegex.findAll(scriptText).forEach { match ->
+                    val candidateUrl = match.value
+                    val type = when {
+                        typeMatches(candidateUrl, MediaType.VIDEOS) -> MediaType.VIDEOS
+                        typeMatches(candidateUrl, MediaType.AUDIO) -> MediaType.AUDIO
+                        typeMatches(candidateUrl, MediaType.IMAGES) -> MediaType.IMAGES
+                        else -> null
+                    }
+                    if (type != null && looksLikeContentMedia(candidateUrl, type)) {
+                        links.add(candidateUrl to type)
+                    }
+                }
             }
         }
 
         return links.distinctBy { it.first }
+    }
+
+    private fun extractCandidatesFromAttribute(value: String): List<String> {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return emptyList()
+        return trimmed.split(Regex("[,\\s]+"))
+            .mapNotNull { segment ->
+                val cleaned = segment.trim().removeSuffix(",")
+                if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) cleaned else null
+            }
+    }
+
+    private fun looksLikeContentMedia(url: String, type: MediaType): Boolean {
+        val lower = url.lowercase()
+        val nonContentKeywords = listOf("logo", "favicon", "icon", "avatar", "badge", "sprite", "placeholder", "spinner", "loading", "default", "thumb", "thumbnail")
+        if (nonContentKeywords.any { lower.contains(it) }) return false
+        if (lower.contains("/static/") || lower.contains("/assets/")) return false
+        return typeMatches(url, type)
     }
 
     private fun extractLinks(document: org.jsoup.nodes.Document, baseUrl: String, sameDomain: Boolean, rootDomain: String): List<String> {
@@ -261,5 +382,57 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
     private fun typeMatches(url: String, type: MediaType): Boolean {
         val lowercase = url.lowercase()
         return type.extensions.any { lowercase.endsWith(it) }
+    }
+}
+
+object MediaQualitySelector {
+    fun pickPreferredMediaUrl(candidates: List<String>, type: MediaType, preferredQuality: String): String? {
+        val uniqueCandidates = candidates.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (uniqueCandidates.isEmpty()) return null
+
+        val normalizedPreferred = preferredQuality.trim().lowercase()
+        if (normalizedPreferred.isBlank() || normalizedPreferred == "best" || normalizedPreferred == "highest" || normalizedPreferred == "auto") {
+            return uniqueCandidates.maxByOrNull { qualityScore(it, type) }
+        }
+
+        val exactMatches = uniqueCandidates.filter { candidate ->
+            val lower = candidate.lowercase()
+            lower.contains(normalizedPreferred) || lower.contains(normalizedPreferred.replace("kbps", ""))
+        }
+        return exactMatches.firstOrNull() ?: uniqueCandidates.maxByOrNull { qualityScore(it, type) }
+    }
+
+    private fun qualityScore(candidate: String, type: MediaType): Int {
+        val lower = candidate.lowercase()
+        return when (type) {
+            MediaType.VIDEOS -> {
+                listOf(
+                    "2160p" to 2160,
+                    "1440p" to 1440,
+                    "1080p" to 1080,
+                    "720p" to 720,
+                    "480p" to 480,
+                    "360p" to 360,
+                    "240p" to 240,
+                    "144p" to 144,
+                    "4k" to 2160,
+                    "uhd" to 2160,
+                    "fullhd" to 1080,
+                    "hd" to 720
+                ).firstOrNull { (token, _) -> lower.contains(token) }?.second ?: 0
+            }
+            MediaType.AUDIO -> {
+                listOf(
+                    "320kbps" to 320,
+                    "256kbps" to 256,
+                    "192kbps" to 192,
+                    "160kbps" to 160,
+                    "128kbps" to 128,
+                    "96kbps" to 96,
+                    "64kbps" to 64
+                ).firstOrNull { (token, _) -> lower.contains(token) }?.second ?: 0
+            }
+            else -> 0
+        }
     }
 }

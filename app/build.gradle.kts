@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.mangascraper"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.01"
+        versionCode = 3
+        versionName = "2.0"
     }
 
     flavorDimensions += "release"
@@ -60,6 +60,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.compose.ui:ui:1.4.0")
     implementation("androidx.compose.material3:material3:1.4.0")
+    implementation("androidx.compose.material:material-icons-extended:1.4.0")
     implementation("androidx.compose.ui:ui-tooling-preview:1.4.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jsoup:jsoup:1.18.1")
