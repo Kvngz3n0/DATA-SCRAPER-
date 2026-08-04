@@ -126,6 +126,14 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         scraper.configurePremiumMode(premiumModeEnabled, premiumDomains)
 
         val candidateUrls = mutableListOf<String>()
+        if (isUnsupportedStreamingHost(normalizedUrl)) {
+            progress(
+                "Unsupported host: direct download from this URL is not supported. " +
+                    "Please use a direct media file URL (for example .mp4 or .mp3) instead."
+            )
+            return@withContext emptyList()
+        }
+
         if (looksLikeContentMedia(normalizedUrl, mediaType)) {
             candidateUrls += normalizedUrl
         } else {
@@ -382,6 +390,16 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
     private fun typeMatches(url: String, type: MediaType): Boolean {
         val lowercase = url.lowercase()
         return type.extensions.any { lowercase.endsWith(it) }
+    }
+
+    private fun isUnsupportedStreamingHost(url: String): Boolean {
+        return try {
+            val host = URL(url).host.lowercase()
+            listOf("youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "soundcloud.com", "dailymotion.com")
+                .any { host == it || host.endsWith(".$it") }
+        } catch (_: Exception) {
+            false
+        }
     }
 }
 
