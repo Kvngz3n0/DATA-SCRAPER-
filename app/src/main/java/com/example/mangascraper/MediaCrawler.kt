@@ -251,24 +251,51 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
         )
 
         candidates.forEach { candidate ->
-            try {
-                val process = ProcessBuilder(candidate + listOf("--version"))
-                    .redirectErrorStream(true)
-                    .start()
-                process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { progress(it) }
-                }
-                if (process.waitFor() == 0) {
-                    return candidate
-                }
-            } catch (_: Exception) {
-                // ignore and try the next candidate
-            }
+            if (checkCommandAvailable(candidate, progress)) return candidate
         }
 
         progress("yt-dlp is not installed or not accessible on this device.")
-        progress("Install yt-dlp or use the direct media download mode for standard file URLs.")
+        if (tryInstallYtDlpAutomatically(progress)) {
+            candidates.forEach { candidate ->
+                if (checkCommandAvailable(candidate, progress)) return candidate
+            }
+        }
+
+        progress("yt-dlp could not be installed automatically.")
+        progress("Please install yt-dlp on the device or use the direct media download mode for standard file URLs.")
         return null
+    }
+
+    private fun checkCommandAvailable(command: List<String>, progress: (String) -> Unit): Boolean {
+        return try {
+            val process = ProcessBuilder(command + listOf("--version"))
+                .redirectErrorStream(true)
+                .start()
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { progress(it) }
+            }
+            process.waitFor() == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun tryInstallYtDlpAutomatically(progress: (String) -> Unit): Boolean {
+        val pythonCandidates = listOf("python3", "python")
+        pythonCandidates.forEach { python ->
+            try {
+                progress("Attempting to install yt-dlp using $python...")
+                val installCommand = listOf(python, "-m", "pip", "install", "--user", "yt-dlp")
+                val installResult = runCommand(installCommand, progress)
+                if (installResult == 0) {
+                    progress("Successfully installed yt-dlp via $python.")
+                    return true
+                }
+            } catch (_: Exception) {
+                // ignore and try next python candidate
+            }
+        }
+        return false
     }
 
     private fun buildYtDlpFormat(mediaType: MediaType, preferredQuality: String): String {

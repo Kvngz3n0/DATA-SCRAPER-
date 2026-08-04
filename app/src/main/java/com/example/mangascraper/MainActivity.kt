@@ -57,7 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.launch
 
-private enum class AppScreenMode { MASS_SCRAPER, SINGLE_MEDIA, YTDLP }
+private enum class AppScreenMode { MASS_SCRAPER, YTDLP }
 
 private val BlackGoldColorScheme = darkColorScheme(
     primary = Color(0xFFFFD700),
@@ -112,17 +112,8 @@ fun AppScreen() {
 
     var singleMediaUrl by remember { mutableStateOf("") }
     var singleMediaType by remember { mutableStateOf(MediaType.VIDEOS) }
-    var singleMediaQuality by remember { mutableStateOf("best") }
     var ytDlpQuality by remember { mutableStateOf("best") }
     var qualityMenuExpanded by remember { mutableStateOf(false) }
-
-    val qualityOptions = remember(singleMediaType) {
-        if (singleMediaType == MediaType.AUDIO) {
-            listOf("best", "320kbps", "192kbps", "128kbps", "64kbps")
-        } else {
-            listOf("best", "2160p", "1440p", "1080p", "720p", "480p", "360p")
-        }
-    }
 
     val ytDlpQualityOptions = remember(singleMediaType) {
         if (singleMediaType == MediaType.AUDIO) {
@@ -183,15 +174,6 @@ fun AppScreen() {
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
                 NavigationDrawerItem(
-                    label = { Text("Single media download") },
-                    selected = selectedMode == AppScreenMode.SINGLE_MEDIA,
-                    onClick = {
-                        selectedMode = AppScreenMode.SINGLE_MEDIA
-                        scope.launch { drawerState.close() }
-                    },
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                NavigationDrawerItem(
                     label = { Text("YT-DLP download") },
                     selected = selectedMode == AppScreenMode.YTDLP,
                     onClick = {
@@ -210,7 +192,6 @@ fun AppScreen() {
                         Text(
                             when (selectedMode) {
                                 AppScreenMode.MASS_SCRAPER -> "Mass Site Scraper"
-                                AppScreenMode.SINGLE_MEDIA -> "Single Media Download"
                                 AppScreenMode.YTDLP -> "YT-DLP Download"
                             }
                         )
@@ -383,95 +364,6 @@ fun AppScreen() {
                         item {
                             if (showResultCount) {
                                 Text("Found ${results.size} media items", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    AppScreenMode.SINGLE_MEDIA -> {
-                        item {
-                            Text("Single file download", fontWeight = FontWeight.Bold)
-                        }
-
-                        item {
-                            OutlinedTextField(
-                                value = singleMediaUrl,
-                                onValueChange = { singleMediaUrl = it },
-                                label = { Text("Media URL") },
-                                placeholder = { Text("https://example.com/video.mp4") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
-                        item {
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Button(
-                                    onClick = { singleMediaType = MediaType.VIDEOS },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Video")
-                                }
-                                Button(
-                                    onClick = { singleMediaType = MediaType.AUDIO },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Audio")
-                                }
-                            }
-                        }
-
-                        item {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Button(onClick = { qualityMenuExpanded = true }) {
-                                    Text("Quality: ${singleMediaQuality}")
-                                }
-                                DropdownMenu(
-                                    expanded = qualityMenuExpanded,
-                                    onDismissRequest = { qualityMenuExpanded = false }
-                                ) {
-                                    qualityOptions.forEach { option ->
-                                        DropdownMenuItem(
-                                            text = { Text(option) },
-                                            onClick = {
-                                                singleMediaQuality = option
-                                                qualityMenuExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        item {
-                            Button(
-                                onClick = {
-                                    if (singleMediaUrl.isBlank()) {
-                                        logMessages.add("Please enter a media URL.")
-                                        return@Button
-                                    }
-                                    isRunning = true
-                                    logMessages.clear()
-                                    scope.launch {
-                                        val downloaded = crawler.downloadSingleMedia(
-                                            mediaUrl = singleMediaUrl,
-                                            mediaType = singleMediaType,
-                                            preferredQuality = singleMediaQuality,
-                                            destinationTreeUri = destinationUri,
-                                            premiumModeEnabled = premiumMode,
-                                            premiumDomains = premiumDomains,
-                                            progress = { message ->
-                                                logMessages.add(message)
-                                            }
-                                        )
-                                        isRunning = false
-                                        if (downloaded.isEmpty()) {
-                                            logMessages.add("No media was downloaded.")
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !isRunning
-                            ) {
-                                Text(if (isRunning) "Downloading..." else "Download selected media")
                             }
                         }
                     }
