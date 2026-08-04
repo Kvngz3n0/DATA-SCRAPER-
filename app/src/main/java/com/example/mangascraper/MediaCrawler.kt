@@ -281,20 +281,31 @@ class MediaCrawler(private val context: Context, private val scraper: ScraperSer
     }
 
     private fun tryInstallYtDlpAutomatically(progress: (String) -> Unit): Boolean {
-        val pythonCandidates = listOf("python3", "python")
-        pythonCandidates.forEach { python ->
+        val installCandidates = listOf(
+            listOf("python3", "-m", "pip", "install", "--user", "yt-dlp"),
+            listOf("python", "-m", "pip", "install", "--user", "yt-dlp"),
+            listOf("pip3", "install", "--user", "yt-dlp"),
+            listOf("pip", "install", "--user", "yt-dlp"),
+            listOf("python3", "-m", "pip", "install", "yt-dlp"),
+            listOf("python", "-m", "pip", "install", "yt-dlp")
+        )
+
+        installCandidates.forEach { installCommand ->
             try {
-                progress("Attempting to install yt-dlp using $python...")
-                val installCommand = listOf(python, "-m", "pip", "install", "--user", "yt-dlp")
+                progress("Attempting to install yt-dlp using: ${installCommand.joinToString(" ")}")
                 val installResult = runCommand(installCommand, progress)
                 if (installResult == 0) {
-                    progress("Successfully installed yt-dlp via $python.")
+                    progress("Successfully installed yt-dlp.")
                     return true
                 }
-            } catch (_: Exception) {
-                // ignore and try next python candidate
+            } catch (e: Exception) {
+                progress("Automatic install failed: ${e.message}")
             }
         }
+
+        progress("Automatic yt-dlp installation failed."
+            + " This device may not have a supported Python or pip environment.")
+        progress("Install yt-dlp manually, or run the app on a device with Python/pip available.")
         return false
     }
 
